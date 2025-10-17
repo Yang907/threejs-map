@@ -1,0 +1,301 @@
+<!--
+ * @Author: yangbing
+ * @Date: 2025-09-19 09:58:18
+ * @LastEditors: yangbing
+ * @LastEditTime: 2025-09-29 17:18:51
+ * @FilePath: \广州1822老版本d:\代码\test\threejs\map3D.html
+ * @Description: Do not edit
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>map3D</title>
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-image: url("./assets/bg01.png");
+        background-size: 100% 100%;
+      }
+      #info {
+        position: absolute;
+        background: rgba(0, 0, 0, 0.5);
+        color: #fff;
+        border-radius: 2px;
+        padding: 5px 10px;
+        display: none;
+        width: auto; /* 设置宽度自适应 */
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info"></div>
+    <script src="./three.js-r131/build/three.js"></script>
+    <script src="./three.js-r131/examples/js/controls/OrbitControls.js"></script>
+    <script src="./d3.v7.min.js"></script>
+    <script>
+      const uniforms = {
+        uTime: { value: 0 },
+        uTransitionWidth: { value: 5 }, // 过渡宽度 uniform，默认为 0.5
+        // uMouse: { value: new THREE.Vector2() },
+      };
+      const boxWidth = window.innerWidth;
+      const boxHeight = window.innerHeight;
+      const handleProj = d3
+        .geoMercator()
+        .center([109, 34.5])
+        .scale(1000)
+        .translate([0, 0]); // d3投影转换函数
+      const mapContainer = new THREE.Object3D(); // 存储地图Object3D对象
+
+      // 创建一个场景
+      const scene = new THREE.Scene();
+      // scene.background = new THREE.Color(0xffffff);
+      // 创建坐标轴辅助对象，参数为轴的长度
+      const axesHelper = new THREE.AxesHelper(500); // 500 表示 X、Y、Z 轴的长度
+
+      // 将坐标轴添加到场景中
+      scene.add(axesHelper);
+      // 创建一个相机
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        boxWidth / boxHeight,
+        0.01,
+        1000
+      );
+      camera.position.set(100, -120, 90);
+      camera.up = new THREE.Vector3(0, 0, 1);
+      // 创建渲染器
+      const renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+      });
+      renderer.setSize(boxWidth, boxHeight); // 设置渲染器的尺寸
+
+      // 初始化环境光
+      const initLight = () => {
+        const ambLight = new THREE.AmbientLight("#ffffff", 0.3);
+        // 聚光灯相关属性
+        const spotLight = new THREE.SpotLight(0xffffff);
+        spotLight.position.set(40, 200, 10);
+        spotLight.castShadow = true; // 聚光灯是否产生阴影
+        scene.add(ambLight, spotLight);
+      };
+
+      // 初始化地理数据集
+      const initGeom = () => {
+        getJSON();
+      };
+      // 处理地图数据
+      const handleData = (jsonData) => {
+        const feaureList = jsonData.features;
+        feaureList.forEach((feature) => {
+          const provice = new THREE.Object3D();
+          provice.properties = feature.properties.name;
+          provice.name = feature.properties.name;
+          mapContainer.name = feature.properties.name;
+          const coordinates = feature.geometry.coordinates; // 省份坐标信息
+          if (feature.geometry.type === "MultiPolygon") {
+            coordinates.forEach((coord) => {
+              coord.forEach((coordinate) => {
+                // 三维多边形
+                const extrudeMesh = creatDepthPolygon(coordinate);
+                extrudeMesh.properties = feature.properties.name;
+                // 线条
+                const line = createLine(coordinate);
+                provice.add(extrudeMesh);
+                provice.add(line);
+              });
+            });
+          }
+          if (feature.geometry.type === "Polygon") {
+            coordinates.forEach((coordinate) => {
+              // 三维多边形
+              const extrudeMesh = creatDepthPolygon(coordinate);
+              extrudeMesh.properties = feature.properties.name;
+              // 线条
+              const line = createLine(coordinate);
+              provice.add(extrudeMesh);
+              provice.add(line);
+            });
+          }
+          mapContainer.add(provice);
+        });
+        scene.add(mapContainer);
+
+        // 计算盒子中心点，将模型居中
+        let box = new THREE.Box3().setFromObject(mapContainer);
+        let mdlen = box.max.x - box.min.x; // 模型长度
+        let mdwid = box.max.z - box.min.z; // 模型宽度
+        let mdhei = box.max.y - box.min.y; // 模型高度
+        let x1 = box.min.x + mdlen / 2; // 模型中心点坐标X
+        let y1 = box.min.y + mdhei / 2; // 模型中心点坐标Y
+        let z1 = box.min.z + mdwid / 2; // 模型中心点坐标Z
+        mapContainer.position.set(-x1, -y1, -z1); // 将模型进行偏移
+      };
+
+      // 创建三维多边形
+      const creatDepthPolygon = (coordinates) => {
+        const shape = new THREE.Shape();
+        coordinates.forEach((item, index) => {
+          const [x_XYZ, y_XYZ] = handleProj(item);
+          if (index === 0) {
+            shape.moveTo(x_XYZ, -y_XYZ);
+          } else {
+            shape.lineTo(x_XYZ, -y_XYZ);
+          }
+        });
+        const extrudeSettings = {
+          steps: 2,
+          depth: 16,
+          bevelEnabled: true,
+          bevelThickness: 1,
+          bevelSize: 1,
+          bevelOffset: 0,
+          bevelSegments: 1,
+        };
+        const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings); // 挤压缓冲几何体
+        const materials = [
+          new THREE.MeshBasicMaterial({
+            color: "#5da4d4",
+            transparent: true,
+            opacity: 1,
+          }),
+          // new THREE.MeshBasicMaterial({
+          //   color: "#155472",
+          //   transparent: true,
+          //   opacity: 0.9,
+          // }),
+          new THREE.ShaderMaterial({
+            uniforms,
+            vertexShader: `
+              varying vec2 vUv;
+              void main() {
+                vUv = uv; // 将 UV 传入 fragment shader
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              }`, // 填入前面写好的顶点着色器
+            fragmentShader: `
+              uniform float uTime;
+              uniform float uTransitionWidth; // 新增的过渡宽度 uniform
+              varying vec2 vUv;
+            
+              // 颜色插值函数（可替换为你想要的颜色）
+              vec3 colorA = vec3(0.275, 0.635, 0.973); // 顶部颜色
+              vec3 colorB = vec3(0.561, 0.761, 0.949); // 底部颜色
+            
+              void main() {
+                // 创建一个随时间线性增加的偏移量
+                float speed = 1.0; // 调整这个值以改变速度
+                float offset = -uTime * speed;
+                float y = mod(vUv.y + offset, 8.0);
+            
+                // 调整这里以控制过渡宽度
+                float transitionCenter = 4.0; // 过渡中心点，默认在中间
+                float normalizedY = (y - transitionCenter) / uTransitionWidth + 0.5; // 根据过渡宽度调整位置
+                normalizedY = clamp(normalizedY, 0.0, 8.0); // 确保范围在 [0, 2]
+
+                vec3 color = mix(colorA, colorB, normalizedY);
+
+                gl_FragColor = vec4(color, 0.9);
+              }`, // 填入片元着色器
+            side: THREE.DoubleSide,
+          }),
+        ];
+        return new THREE.Mesh(geometry, materials);
+      };
+
+      // 创建线条
+      const createLine = (coordinate) => {
+        const material = new THREE.LineBasicMaterial({
+          color: "#fff",
+        });
+        const points = [];
+        coordinate.forEach((item) => {
+          const [x_XYZ, y_XYZ] = handleProj(item);
+          points.push(new THREE.Vector3(x_XYZ, -y_XYZ, 18));
+        });
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        return new THREE.Line(geometry, material);
+      };
+
+      // 光线投射
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      //鼠标放上去 改变颜色 显示地区名字
+      let activeIntersects = []; //鼠标滑过数据
+      const onPointerMove = (event) => {
+        let info = document.querySelector("#info");
+        // 将鼠标位置归一化为设备坐标。x 和 y 方向的取值范围是 (-1 to +1)
+        pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+        pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        // 通过摄像机和鼠标位置更新射线
+        raycaster.setFromCamera(pointer, camera);
+
+        // 判断数组是否有数据，有数据全部设置为原始数据
+        if (activeIntersects.length) {
+          for (let i = 0; i < activeIntersects.length; i++) {
+            activeIntersects[i].object.material.color.set("#d13a34");
+          }
+        }
+        // 计算物体和射线的焦点
+        const intersects = raycaster.intersectObjects(scene.children);
+
+        if (intersects.length && intersects[0].object.parent.name) {
+          // 设置hove 弹框的宽高
+          info.style.left = event.clientX + "px";
+          info.style.top = event.clientY + "px";
+          info.style.display = "block";
+          info.innerHTML = intersects[0].object.parent.name;
+        } else {
+          info.style.display = "none";
+        }
+
+        // 数组数据清空
+        activeIntersects = [];
+
+        // 滑过的当前这个高亮
+        for (let i = 0; i < intersects.length; i++) {
+          if (intersects[i].object.type === "Mesh") {
+            intersects[i].object.material.color.set(0xff0000);
+            activeIntersects.push(intersects[i]);
+          }
+        }
+      };
+      window.addEventListener("pointermove", onPointerMove);
+
+      // 设置相机控件轨道控制器OrbitControls
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true; //阻尼 更真实
+      controls.target.set(0, 0, 1);
+
+      // 渲染
+      // 因为后期是每一帧都需要渲染，需要封装一个渲染函数
+      const render = (time) => {
+        uniforms.uTime.value += 0.05;
+        // 使用渲染器，通过相机 将场景渲染出来
+        renderer.render(scene, camera);
+        // 渲染下一帧的时候会调用render函数
+        requestAnimationFrame(render);
+      };
+
+      const getJSON = () => {
+        fetch(
+          "https://geo.datav.aliyun.com/areas_v3/bound/geojson?code=510000_full"
+        )
+          .then((response) => response.json())
+          .then((data) => {
+            handleData(data);
+          })
+          .catch((error) => console.error("加载 JSON 失败:", error));
+      };
+      initGeom();
+      initLight();
+      render();
+      document.body.appendChild(renderer.domElement);
+    </script>
+  </body>
+</html>
